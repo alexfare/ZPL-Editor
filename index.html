@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Labelary — ZPL Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Labelary home">
+      <span class="brand-mark">L</span>
+      <span>Labelary</span>
+    </a>
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <span>Projects</span><span>/</span><strong>Shipping Label</strong>
+    </nav>
+    <div class="top-actions">
+      <span class="saved"><i></i> Saved</span>
+      <button class="icon-button" id="undoButton" aria-label="Undo">↶</button>
+      <button class="icon-button" id="redoButton" aria-label="Redo">↷</button>
+      <button class="button secondary" id="downloadButton">↓ Export ZPL</button>
+      <button class="button primary" id="printButton">Print label</button>
+      <button class="avatar" aria-label="Account menu">AF</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="left-panel">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">Elements</span>
+          <h2>Build your label</h2>
+        </div>
+        <button class="small-icon" aria-label="Collapse panel">‹</button>
+      </div>
+
+      <label class="search">
+        <span>⌕</span>
+        <input id="elementSearch" type="search" placeholder="Search elements">
+        <kbd>⌘ K</kbd>
+      </label>
+
+      <div class="element-list" id="elementList">
+        <button class="element-card" draggable="true" data-type="text">
+          <span class="element-icon">T</span><span><strong>Text</strong><small>Names, notes, instructions</small></span><b>＋</b>
+        </button>
+        <button class="element-card" draggable="true" data-type="barcode">
+          <span class="element-icon barcode-icon">▥</span><span><strong>Barcode</strong><small>Code 128, EAN, UPC</small></span><b>＋</b>
+        </button>
+        <button class="element-card" draggable="true" data-type="qr">
+          <span class="element-icon qr-icon">▦</span><span><strong>QR code</strong><small>URLs and data</small></span><b>＋</b>
+        </button>
+        <button class="element-card" draggable="true" data-type="box">
+          <span class="element-icon">□</span><span><strong>Shape</strong><small>Boxes and dividers</small></span><b>＋</b>
+        </button>
+      </div>
+
+      <div class="layers-header"><span class="eyebrow">Layers</span><button>•••</button></div>
+      <div class="layers" id="layers"></div>
+    </aside>
+
+    <section class="center-panel">
+      <div class="canvas-toolbar">
+        <div class="segmented" role="tablist">
+          <button class="active" data-view="design">Design</button>
+          <button data-view="code">ZPL code</button>
+        </div>
+        <div class="toolbar-right">
+          <label>Label size
+            <select id="sizeSelect">
+              <option value="4x6">4 × 6 in</option>
+              <option value="4x4">4 × 4 in</option>
+              <option value="3x2">3 × 2 in</option>
+            </select>
+          </label>
+          <span class="divider"></span>
+          <button class="tool-button" id="zoomOut">−</button>
+          <span id="zoomLabel">76%</span>
+          <button class="tool-button" id="zoomIn">＋</button>
+          <button class="fit-button" id="fitButton">Fit</button>
+        </div>
+      </div>
+
+      <div class="canvas-area" id="canvasArea">
+        <div class="ruler ruler-x"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span></div>
+        <div class="ruler ruler-y"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span></div>
+        <div class="label-wrap" id="labelWrap">
+          <div class="label" id="labelCanvas" aria-label="Shipping label canvas"></div>
+          <div class="label-shadow"></div>
+        </div>
+        <div class="drop-hint" id="dropHint">Drop elements anywhere on the label</div>
+      </div>
+
+      <div class="code-area" id="codeArea" hidden>
+        <div class="code-header"><span>shipping-label.zpl</span><button id="copyCode">Copy code</button></div>
+        <textarea id="zplEditor" spellcheck="false" aria-label="ZPL code editor"></textarea>
+        <div class="code-footer"><span id="codeStatus">Valid ZPL</span><span>UTF-8 · LF</span></div>
+      </div>
+    </section>
+
+    <aside class="right-panel">
+      <div class="inspector-header">
+        <div><span class="eyebrow">Properties</span><h2 id="propertyTitle">Text</h2></div>
+        <button class="small-icon" aria-label="Close properties">×</button>
+      </div>
+
+      <div id="propertiesForm">
+        <section class="property-section">
+          <label class="field-label" for="contentInput">Content</label>
+          <textarea id="contentInput" rows="3"></textarea>
+          <button class="data-button">⌁ Insert variable</button>
+        </section>
+        <section class="property-section" id="typographySection">
+          <span class="field-label">Typography</span>
+          <select id="fontSelect"><option>Arial</option><option>Roboto Mono</option><option>Inter</option></select>
+          <div class="field-row">
+            <label><span>Size</span><div class="input-suffix"><input id="fontSize" type="number"><b>pt</b></div></label>
+            <label><span>Style</span><select id="fontWeight"><option value="400">Regular</option><option value="700">Bold</option></select></label>
+          </div>
+          <div class="alignment" aria-label="Text alignment">
+            <button class="active">≡</button><button>≣</button><button>≡</button>
+          </div>
+        </section>
+        <section class="property-section">
+          <span class="field-label">Position & size</span>
+          <div class="field-grid">
+            <label><span>X</span><div class="input-suffix"><input id="posX" type="number"><b>px</b></div></label>
+            <label><span>Y</span><div class="input-suffix"><input id="posY" type="number"><b>px</b></div></label>
+            <label><span>W</span><div class="input-suffix"><input id="sizeW" type="number"><b>px</b></div></label>
+            <label><span>H</span><div class="input-suffix"><input id="sizeH" type="number"><b>px</b></div></label>
+          </div>
+        </section>
+        <section class="property-section compact-section">
+          <label class="toggle-row"><span>Show border</span><input id="borderToggle" type="checkbox" role="switch"></label>
+          <label class="toggle-row"><span>Lock element</span><input id="lockToggle" type="checkbox" role="switch"></label>
+        </section>
+        <button class="delete-button" id="deleteButton">Delete element</button>
+      </div>
+
+      <div class="preview-card">
+        <div><span class="eyebrow">Live preview</span><strong>203 DPI</strong></div>
+        <div class="mini-label" id="miniLabel"></div>
+        <span class="preview-status"><i></i> Rendered just now</span>
+      </div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
