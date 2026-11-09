@@ -20,6 +20,9 @@ let elements = [
 let selectedId = 2;
 let zoom = .76;
 let dragState = null;
+let labelSize = { width: 360, height: 540 };
+let currentProjectId = null;
+let saveTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('labelCanvas');
@@ -31,10 +34,11 @@ function renderElement(item, miniature = false) {
   const node = document.createElement('div');
   node.className = `canvas-element ${item.type}${item.id === selectedId && !miniature ? ' selected' : ''}${item.border ? ' has-border' : ''}`;
   node.dataset.id = item.id;
-  const ratio = miniature ? .25 : 1;
+  const ratio = miniature ? Math.min(90 / labelSize.width, 135 / labelSize.height) : 1;
   Object.assign(node.style, {
     left: `${item.x * ratio}px`, top: `${item.y * ratio}px`, width: `${item.w * ratio}px`, height: `${item.h * ratio}px`,
-    fontSize: `${item.fontSize * ratio}px`, fontWeight: item.weight, borderWidth: miniature ? '.5px' : ''
+    fontSize: `${item.fontSize * ratio}px`, fontWeight: item.weight, borderWidth: miniature ? '.5px' : '',
+    transform: `rotate(${item.rotation || 0}deg)`, transformOrigin: 'top left'
   });
   if (item.type !== 'qr' && item.type !== 'box') node.textContent = item.content;
   if (!miniature) {
@@ -45,6 +49,12 @@ function renderElement(item, miniature = false) {
 }
 
 function render() {
+  canvas.style.width = `${labelSize.width}px`;
+  canvas.style.height = `${labelSize.height}px`;
+  $('labelWrap').style.width = `${labelSize.width}px`;
+  $('labelWrap').style.height = `${labelSize.height}px`;
+  mini.style.width = `${labelSize.width * Math.min(90 / labelSize.width, 135 / labelSize.height)}px`;
+  mini.style.height = `${labelSize.height * Math.min(90 / labelSize.width, 135 / labelSize.height)}px`;
   canvas.replaceChildren(...elements.map((item) => renderElement(item)));
   mini.replaceChildren(...elements.map((item) => renderElement(item, true)));
   $('layers').replaceChildren(...elements.slice().reverse().map((item) => {
@@ -56,6 +66,7 @@ function render() {
   }));
   syncProperties();
   syncCode();
+  scheduleSave();
 }
 
 function selectElement(id) { selectedId = id; render(); }
@@ -74,23 +85,27 @@ function syncProperties() {
   $('posY').value = Math.round(item.y);
   $('sizeW').value = Math.round(item.w);
   $('sizeH').value = Math.round(item.h);
+  $('rotationSelect').value = item.rotation || 0;
   $('borderToggle').checked = Boolean(item.border);
   $('lockToggle').checked = Boolean(item.locked);
 }
 
 function zplFor(item) {
   const x = Math.round(item.x * 2.25), y = Math.round(item.y * 2.25);
-  if (item.type === 'text') return `^FO${x},${y}^A0N,${Math.round(item.fontSize * 2.25)},${Math.round(item.fontSize * 1.8)}^FD${item.content.replace(/\n/g, '\\&')}^FS`;
-  if (item.type === 'barcode') return `^FO${x},${y}^BCN,${Math.round(item.h * 1.8)},Y,N,N^FD${item.content}^FS`;
-  if (item.type === 'qr') return `^FO${x},${y}^BQN,2,5^FDLA,${item.content}^FS`;
+  const orientation = ({ 0: 'N', 90: 'R', 180: 'I', 270: 'B' })[item.rotation || 0];
+  if (item.type === 'text') return `^FO${x},${y}^A0${orientation},${Math.round(item.fontSize * 2.25)},${Math.round(item.fontSize * 1.8)}^FD${item.content.replace(/\n/g, '\\&')}^FS`;
+  if (item.type === 'barcode') return `^FO${x},${y}^BC${orientation},${Math.round(item.h * 1.8)},Y,N,N^FD${item.content}^FS`;
+  if (item.type === 'qr') return `^FO${x},${y}^BQ${orientation},2,5^FDLA,${item.content}^FS`;
   return `^FO${x},${y}^GB${Math.round(item.w * 2.25)},${Math.max(2, Math.round(item.h * 2.25))},2^FS`;
 }
 
-function generateZpl() { return `^XA\n^PW812\n^LL1218\n${elements.map(zplFor).join('\n')}\n^XZ`; }
+function generateZpl() { return `^XA\n^PW${Math.round(labelSize.width * 2.25)}\n^LL${Math.round(labelSize.height * 2.25)}\n${elements.map(zplFor).join('\n')}\n^XZ`; }
 function syncCode() { if (document.activeElement !== $('zplEditor')) $('zplEditor').value = generateZpl(); }
 
 function parseZpl(source) {
   const parsed = [];
+  const width = Number(source.match(/\^PW(\d+)/)?.[1]) / 2.25;
+  const height = Number(source.match(/\^LL(\d+)/)?.[1]) / 2.25;
   const lines = source.split(/\r?\n/);
   lines.forEach((line) => {
     const origin = line.match(/\^FO(\d+),(\d+)/);
@@ -99,21 +114,23 @@ function parseZpl(source) {
     const y = Number(origin[2]) / 2.25;
     const content = line.match(/\^FD(?:LA,)?(.*?)\^FS/)?.[1]?.replace(/\\&/g, '\n') || '';
     const id = parsed.length + 1;
-    const font = line.match(/\^A0N,(\d+),(\d+)/);
-    const barcode = line.match(/\^BCN,(\d+)/);
+    const font = line.match(/\^A0([NRIB]),(\d+),(\d+)/);
+    const barcode = line.match(/\^BC([NRIB]),(\d+)/);
     const box = line.match(/\^GB(\d+),(\d+),(\d+)/);
+    const orientation = font?.[1] || barcode?.[1] || line.match(/\^BQ([NRIB]),/)?.[1] || 'N';
+    const rotation = ({ N: 0, R: 90, I: 180, B: 270 })[orientation];
     if (font) {
-      const fontSize = Number(font[1]) / 2.25;
-      parsed.push({ ...presets.text, id, name: content.slice(0, 18) || 'Text', content, x, y, w: Math.max(80, content.split('\n').reduce((max, row) => Math.max(max, row.length), 0) * fontSize * .62), h: Math.max(20, content.split('\n').length * fontSize * 1.15), fontSize });
+      const fontSize = Number(font[2]) / 2.25;
+      parsed.push({ ...presets.text, id, name: content.slice(0, 18) || 'Text', content, x, y, w: Math.max(80, content.split('\n').reduce((max, row) => Math.max(max, row.length), 0) * fontSize * .62), h: Math.max(20, content.split('\n').length * fontSize * 1.15), fontSize, rotation });
     } else if (barcode) {
-      parsed.push({ ...presets.barcode, id, content, x, y, w: 280, h: Number(barcode[1]) / 1.8 });
-    } else if (line.includes('^BQN')) {
-      parsed.push({ ...presets.qr, id, content, x, y });
+      parsed.push({ ...presets.barcode, id, content, x, y, w: 280, h: Number(barcode[2]) / 1.8, rotation });
+    } else if (/\^BQ[NRIB],/.test(line)) {
+      parsed.push({ ...presets.qr, id, content, x, y, rotation });
     } else if (box) {
       parsed.push({ ...presets.box, id, x, y, w: Number(box[1]) / 2.25, h: Math.max(1, Number(box[2]) / 2.25) });
     }
   });
-  return parsed;
+  return { elements: parsed, width, height };
 }
 
 function updateSelected(field, value) {
@@ -133,8 +150,8 @@ function startDrag(event) {
 
 window.addEventListener('pointermove', (event) => {
   if (!dragState) return;
-  dragState.item.x = Math.max(0, Math.min(360 - dragState.item.w, dragState.x + (event.clientX - dragState.startX) / zoom));
-  dragState.item.y = Math.max(0, Math.min(540 - dragState.item.h, dragState.y + (event.clientY - dragState.startY) / zoom));
+  dragState.item.x = Math.max(0, Math.min(labelSize.width - dragState.item.w, dragState.x + (event.clientX - dragState.startX) / zoom));
+  dragState.item.y = Math.max(0, Math.min(labelSize.height - dragState.item.h, dragState.y + (event.clientY - dragState.startY) / zoom));
   render();
 });
 window.addEventListener('pointerup', () => { dragState = null; });
@@ -166,7 +183,19 @@ canvas.addEventListener('click', () => { selectedId = null; render(); });
 });
 $('borderToggle').onchange = (event) => updateSelected('border', event.target.checked);
 $('lockToggle').onchange = (event) => updateSelected('locked', event.target.checked);
-$('deleteButton').onclick = () => { elements = elements.filter((item) => item.id !== selectedId); selectedId = elements[0]?.id; render(); };
+$('rotationSelect').onchange = (event) => updateSelected('rotation', Number(event.target.value));
+function deleteSelected() {
+  if (selectedId == null) return;
+  elements = elements.filter((item) => item.id !== selectedId);
+  selectedId = elements[0]?.id ?? null;
+  render();
+}
+$('deleteButton').onclick = deleteSelected;
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Delete' || event.target.matches('input, textarea, select') || event.target.isContentEditable) return;
+  event.preventDefault();
+  deleteSelected();
+});
 
 document.querySelectorAll('.segmented button').forEach((button) => button.onclick = () => {
   document.querySelectorAll('.segmented button').forEach((item) => item.classList.toggle('active', item === button));
@@ -206,10 +235,27 @@ $('downloadButton').onclick = () => {
 $('printButton').onclick = () => window.print();
 $('sizeSelect').onchange = (event) => {
   const sizes = { '4x6': [360, 540], '4x4': [360, 360], '3x2': [360, 240] };
-  const [width, height] = sizes[event.target.value];
-  canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
-  $('labelWrap').style.width = `${width}px`; $('labelWrap').style.height = `${height}px`;
+  const isCustom = event.target.value === 'custom';
+  $('customSize').hidden = !isCustom;
+  if (!isCustom) {
+    const [width, height] = sizes[event.target.value];
+    labelSize = { width, height };
+    $('labelWidth').value = width / 90;
+    $('labelHeight').value = height / 90;
+    render();
+  }
 };
+
+function updateCustomSize() {
+  const width = Number($('labelWidth').value) * 90;
+  const height = Number($('labelHeight').value) * 90;
+  if (width >= 45 && height >= 45) {
+    labelSize = { width, height };
+    render();
+  }
+}
+$('labelWidth').oninput = updateCustomSize;
+$('labelHeight').oninput = updateCustomSize;
 
 $('zplEditor').addEventListener('input', () => {
   const value = $('zplEditor').value.trim();
@@ -218,13 +264,101 @@ $('zplEditor').addEventListener('input', () => {
   $('codeStatus').style.color = valid ? '#8fd0a9' : '#f1a58e';
   if (valid) {
     const parsed = parseZpl(value);
-    if (parsed.length) {
-      elements = parsed;
-      selectedId = parsed[0].id;
+    if (parsed.elements.length) {
+      elements = parsed.elements;
+      selectedId = parsed.elements[0].id;
+      if (parsed.width > 0 && parsed.height > 0) {
+        labelSize = { width: parsed.width, height: parsed.height };
+        $('sizeSelect').value = 'custom';
+        $('customSize').hidden = false;
+        $('labelWidth').value = (parsed.width / 90).toFixed(2).replace(/\.00$/, '');
+        $('labelHeight').value = (parsed.height / 90).toFixed(2).replace(/\.00$/, '');
+      }
       render();
     }
   }
 });
+
+const PROJECTS_KEY = 'zpl-editor-projects';
+
+function getProjects() {
+  try { return JSON.parse(localStorage.getItem(PROJECTS_KEY)) || []; }
+  catch { return []; }
+}
+
+function setProjects(projects) { localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)); }
+
+function saveProject() {
+  if (!currentProjectId) return;
+  const projects = getProjects();
+  const project = projects.find((item) => item.id === currentProjectId);
+  if (!project) return;
+  project.elements = elements;
+  project.labelSize = labelSize;
+  project.updatedAt = Date.now();
+  setProjects(projects);
+}
+
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveProject, 150);
+}
+
+function syncLabelSizeControls() {
+  const preset = { '360x540': '4x6', '360x360': '4x4', '360x240': '3x2' }[`${labelSize.width}x${labelSize.height}`];
+  $('sizeSelect').value = preset || 'custom';
+  $('customSize').hidden = Boolean(preset);
+  $('labelWidth').value = (labelSize.width / 90).toFixed(2).replace(/\.00$/, '');
+  $('labelHeight').value = (labelSize.height / 90).toFixed(2).replace(/\.00$/, '');
+}
+
+function openProject(project) {
+  currentProjectId = project.id;
+  elements = structuredClone(project.elements);
+  labelSize = { ...project.labelSize };
+  selectedId = elements[0]?.id ?? null;
+  $('projectName').textContent = project.name;
+  syncLabelSizeControls();
+  $('projectsView').hidden = true;
+  $('workspace').hidden = false;
+  render();
+}
+
+function showProjects() {
+  saveProject();
+  const projects = getProjects().sort((a, b) => b.updatedAt - a.updatedAt);
+  $('projectGrid').replaceChildren(...projects.map((project) => {
+    const button = document.createElement('button');
+    button.className = 'project-card';
+    button.innerHTML = `<strong></strong><small>${(project.labelSize.width / 90).toFixed(1)} × ${(project.labelSize.height / 90).toFixed(1)} in</small><span>Open project →</span>`;
+    button.querySelector('strong').textContent = project.name;
+    button.onclick = () => openProject(project);
+    return button;
+  }));
+  $('workspace').hidden = true;
+  $('projectsView').hidden = false;
+  $('projectName').textContent = 'Projects';
+}
+
+$('projectsButton').onclick = showProjects;
+$('newProjectButton').onclick = () => {
+  const name = prompt('Project name', 'Untitled label')?.trim();
+  if (!name) return;
+  const project = { id: crypto.randomUUID(), name, elements: [], labelSize: { width: 360, height: 540 }, updatedAt: Date.now() };
+  const projects = getProjects();
+  projects.push(project);
+  setProjects(projects);
+  openProject(project);
+};
+
+const savedProjects = getProjects();
+if (savedProjects.length) {
+  openProject(savedProjects.sort((a, b) => b.updatedAt - a.updatedAt)[0]);
+} else {
+  const project = { id: crypto.randomUUID(), name: 'Shipping Label', elements: structuredClone(elements), labelSize: { ...labelSize }, updatedAt: Date.now() };
+  setProjects([project]);
+  currentProjectId = project.id;
+}
 
 setZoom(zoom);
 render();
